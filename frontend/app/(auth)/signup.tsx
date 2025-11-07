@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import {
   View,
   Text,
@@ -21,8 +21,14 @@ export default function SignupScreen() {
   const [email, setEmail] = useState('')
   const [otp, setOtp] = useState('')
   const [loading, setLoading] = useState(false)
-  const { signUpWithOTP, verifyOTP } = useAuth()
+  const { signUpWithOTP, verifyOTP, user, session } = useAuth()
   const router = useRouter()
+
+  useEffect(() => {
+    if (user && session) {
+      router.replace('/(tabs)/feed') // Adjust to your app's home route
+    }
+  }, [user, session])
 
   const handleSendOTP = async () => {
     if (!username || !email) {
@@ -61,7 +67,7 @@ export default function SignupScreen() {
     setLoading(true)
     try {
       await verifyOTP(email, otp)
-      // Will automatically navigate via auth state change
+      // Navigation happens via useEffect above
     } catch (error) {
       console.error(error)
       setOtp('') // Clear OTP on error
