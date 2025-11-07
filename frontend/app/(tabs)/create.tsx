@@ -1,14 +1,20 @@
-import { View, Text, StyleSheet, TouchableOpacity, Image, TextInput, ScrollView, Alert } from 'react-native'
+import { View, Text, StyleSheet, TouchableOpacity, Image, TextInput, ScrollView, Alert, ActivityIndicator } from 'react-native'
 import { useState } from 'react'
 import { Ionicons } from '@expo/vector-icons'
 import * as ImagePicker from 'expo-image-picker'
 import { useAuth } from '../../contexts/AuthContext'
+import { supabase } from '../../lib/supabase'
+import { useRouter } from 'expo-router'
+import { decode } from 'base64-arraybuffer'
+import * as FileSystem from 'expo-file-system'
 
 export default function CreateScreen() {
-  const { profile } = useAuth()
+  const { profile, session } = useAuth()
+  const router = useRouter()
   const [caption, setCaption] = useState('')
   const [selectedImage, setSelectedImage] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+  const [uploadProgress, setUploadProgress] = useState(0)
 
   const pickImage = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync()
@@ -49,22 +55,120 @@ export default function CreateScreen() {
     }
   }
 
+  const uploadImage = async (uri: string): Promise<string> => {
+    try {
+      // Read file as base64
+      const base64 = await FileSystem.readAsStringAsync(uri, {
+        encoding: FileSystem.EncodingType.Base64,
+      })
+
+      // Generate unique filename
+      const fileExt = uri.split('.').pop()?.toLowerCase() || 'jpg'
+      const fileName = `${session?.user.id}/${Date.now()}.${fileExt}`
+      const filePath = `posts/${fileName}`
+
+      setUploadProgress(30)
+
+      // Upload to Supabase Storage
+      const { data, error } = await supabase.storage
+        .from('media')
+        .upload(filePath, decode(base64), {
+          contentType: `image/${fileExt}`,
+          upsert: false
+        })
+
+      if (error) {
+        console.error('Storage upload error:', error)
+        // Fallback to base64 if storage fails
+        return `data:image/${fileExt};base64,${base64}`
+      }
+
+      setUploadProgress(70)
+
+      // Get public URL
+      const { data: publicUrlData } = supabase.storage
+        .from('media')
+        .getPublicUrl(data.path)
+
+      setUploadProgress(100)
+
+      return publicUrlData.publicUrl
+    } catch (error) {
+      console.error('Error uploading image:', error)
+      throw error
+    }
+  }
+
   const handlePost = async () => {
     if (!selectedImage) {
       Alert.alert('Error', 'Please select an image')
       return
     }
 
+    if (!session) {
+      Alert.alert('Error', 'You must be logged in to post')
+      return
+    }
+
     setLoading(true)
+    setUploadProgress(0)
+
     try {
-      // TODO: Implement post creation
-      Alert.alert('Success', 'Post created!')
-      setSelectedImage(null)
-      setCaption('')
+      // Upload image
+      const mediaUrl = await uploadImage(selectedImage)
+
+      // Create post
+      const { error } = await supabase
+        .from('posts')
+        .insert({
+          user_id: session.user.id,
+          caption: caption.trim() || null,
+          media_url: mediaUrl,
+          media_type: 'photo',
+          visibility: 'public'
+        })
+
+      if (error) throw error
+
+      // Award points for posting (5 points)
+      const { data: profileData } = await supabase
+        .from('profiles')
+        .select('points')
+        .eq('id', session.user.id)
+        .single()
+
+      if (profileData) {
+        await supabase
+          .from('profiles')
+          .update({ points: (profileData.points || 0) + 5 })
+          .eq('id', session.user.id)
+
+        // Record transaction
+        await supabase
+          .from('points_transactions')
+          .insert({
+            user_id: session.user.id,
+            amount: 5,
+            reason: 'Created post'
+          })
+      }
+
+      Alert.alert('Success!', 'Your post has been shared! (+5 points)', [
+        {
+          text: 'OK',
+          onPress: () => {
+            setSelectedImage(null)
+            setCaption('')
+            router.push('/(tabs)/feed')
+          }
+        }
+      ])
     } catch (error: any) {
-      Alert.alert('Error', error.message)
+      console.error('Error creating post:', error)
+      Alert.alert('Error', error.message || 'Failed to create post')
     } finally {
       setLoading(false)
+      setUploadProgress(0)
     }
   }
 
@@ -74,12 +178,22 @@ export default function CreateScreen() {
         {selectedImage ? (
           <View style={styles.imageContainer}>
             <Image source={{ uri: selectedImage }} style={styles.image} />
-            <TouchableOpacity
-              style={styles.removeButton}
-              onPress={() => setSelectedImage(null)}
-            >
-              <Ionicons name="close-circle" size={32} color="#EF4444" />
-            </TouchableOpacity>
+            {!loading && (
+              <TouchableOpacity
+                style={styles.removeButton}
+                onPress={() => setSelectedImage(null)}
+              >
+                <Ionicons name="close-circle" size={32} color="#EF4444" />
+              </TouchableOpacity>
+            )}
+            {loading && (
+              <View style={styles.loadingOverlay}>
+                <ActivityIndicator size="large" color="#8B5CF6" />
+                <Text style={styles.loadingText}>
+                  {uploadProgress < 100 ? `Uploading... ${uploadProgress}%` : 'Creating post...'}
+                </Text>
+              </View>
+            )}
           </View>
         ) : (
           <View style={styles.uploadSection}>
@@ -103,6 +217,7 @@ export default function CreateScreen() {
             onChangeText={setCaption}
             multiline
             maxLength={500}
+            editable={!loading}
           />
           <Text style={styles.characterCount}>{caption.length}/500</Text>
         </View>
@@ -113,11 +228,21 @@ export default function CreateScreen() {
             onPress={handlePost}
             disabled={loading}
           >
-            <Text style={styles.postButtonText}>
-              {loading ? 'Posting...' : 'Share Post'}
-            </Text>
+            {loading ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <>
+                <Ionicons name="paper-plane" size={20} color="#fff" />
+                <Text style={styles.postButtonText}>Share Post</Text>
+              </>
+            )}
           </TouchableOpacity>
         )}
+
+        <View style={styles.tipContainer}>
+          <Ionicons name="information-circle" size={20} color="#8B5CF6" />
+          <Text style={styles.tipText}>Earn 5 points for every post!</Text>
+        </View>
       </View>
     </ScrollView>
   )
@@ -165,6 +290,19 @@ const styles = StyleSheet.create({
     backgroundColor: '#1E293B',
     borderRadius: 16,
   },
+  loadingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(15, 23, 42, 0.8)',
+    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 12,
+  },
+  loadingText: {
+    color: '#F8FAFC',
+    fontSize: 16,
+    fontWeight: '600',
+  },
   captionContainer: {
     marginTop: 20,
   },
@@ -191,6 +329,9 @@ const styles = StyleSheet.create({
     padding: 16,
     alignItems: 'center',
     marginTop: 24,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 8,
   },
   postButtonDisabled: {
     opacity: 0.6,
@@ -199,5 +340,22 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 18,
     fontWeight: '600',
+  },
+  tipContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginTop: 24,
+    padding: 16,
+    backgroundColor: '#1E293B',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#8B5CF6',
+  },
+  tipText: {
+    color: '#94A3B8',
+    fontSize: 14,
+    fontWeight: '500',
   },
 })
