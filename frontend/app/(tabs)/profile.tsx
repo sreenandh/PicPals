@@ -7,21 +7,33 @@ import {
   Image,
   Alert,
 } from 'react-native'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Ionicons } from '@expo/vector-icons'
 import { useAuth } from '../../contexts/AuthContext'
 import * as ImagePicker from 'expo-image-picker'
+import { useRouter } from 'expo-router'
 
 export default function ProfileScreen() {
-  const { profile, signOut, updateProfile } = useAuth()
+  const { profile, signOut, updateProfile, session, user } = useAuth()
   const [uploading, setUploading] = useState(false)
+  const router = useRouter()
 
   const handleSignOut = () => {
     Alert.alert('Sign Out', 'Are you sure you want to sign out?', [
       { text: 'Cancel', style: 'cancel' },
-      { text: 'Sign Out', onPress: signOut, style: 'destructive' },
+      { text: 'Sign Out', onPress: async () => {
+          await signOut()
+          router.replace('/(auth)/login')
+        }, style: 'destructive' },
     ])
   }
+
+  // Auto-redirect to login page if logged out (session null)
+  useEffect(() => {
+    if (!session || !user) {
+      router.replace('/(auth)/login')
+    }
+  }, [session, user])
 
   const pickImage = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync()
