@@ -19,7 +19,10 @@ type AuthContextType = {
   profile: Profile | null
   isLoading: boolean
   signUp: (email: string, password: string, username: string) => Promise<void>
+  signUpWithOTP: (email: string, username: string) => Promise<void>
+  verifyOTP: (email: string, token: string) => Promise<void>
   signIn: (email: string, password: string) => Promise<void>
+  signInWithOTP: (email: string) => Promise<void>
   signOut: () => Promise<void>
   updateProfile: (updates: Partial<Profile>) => Promise<void>
   refreshProfile: () => Promise<void>
@@ -48,6 +51,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // Listen for auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (_event, session) => {
+        console.log('Auth state changed:', _event)
         setSession(session)
         setUser(session?.user ?? null)
         if (session?.user) {
@@ -80,7 +84,32 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const signUp = async (email: string, password: string, username: string) => {
     try {
-      // First check if username is available
+      // Sign up with Supabase Auth
+      const { data: authData, error: authError } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          data: {
+            username: username,
+          },
+        },
+      })
+
+      if (authError) throw authError
+
+      Alert.alert(
+        'Success',
+        'Account created! Please check your email to verify your account.'
+      )
+    } catch (error: any) {
+      Alert.alert('Error', error.message)
+      throw error
+    }
+  }
+
+  const signUpWithOTP = async (email: string, username: string) => {
+    try {
+      // Check if username is available
       const { data: existingUser } = await supabase
         .from('profiles')
         .select('username')
@@ -91,34 +120,64 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         throw new Error('Username already taken')
       }
 
-      // Sign up with Supabase Auth
-      const { data: authData, error: authError } = await supabase.auth.signUp({
+      // Send OTP to email
+      const { error } = await supabase.auth.signInWithOtp({
         email,
-        password,
+        options: {
+          shouldCreateUser: true,
+          data: {
+            username: username,
+          },
+        },
       })
 
-      if (authError) throw authError
+      if (error) throw error
 
-      if (authData.user) {
-        // Create profile
-        const { error: profileError } = await supabase
-          .from('profiles')
-          .insert({
-            id: authData.user.id,
-            username,
-            email,
-            points: 0,
-          })
-
-        if (profileError) throw profileError
-
-        Alert.alert(
-          'Success',
-          'Account created! Please check your email to verify your account.'
-        )
-      }
+      Alert.alert(
+        'Check Your Email',
+        'We sent you a 6-digit code. Please enter it to continue.'
+      )
     } catch (error: any) {
       Alert.alert('Error', error.message)
+      throw error
+    }
+  }
+
+  const signInWithOTP = async (email: string) => {
+    try {
+      const { error } = await supabase.auth.signInWithOtp({
+        email,
+        options: {
+          shouldCreateUser: false,
+        },
+      })
+
+      if (error) throw error
+
+      Alert.alert(
+        'Check Your Email',
+        'We sent you a 6-digit code. Please enter it to continue.'
+      )
+    } catch (error: any) {
+      Alert.alert('Error', error.message)
+      throw error
+    }
+  }
+
+  const verifyOTP = async (email: string, token: string) => {
+    try {
+      const { data, error } = await supabase.auth.verifyOtp({
+        email,
+        token,
+        type: 'email',
+      })
+
+      if (error) throw error
+
+      // Session will be set automatically via onAuthStateChange
+      Alert.alert('Success', 'You are now logged in!')
+    } catch (error: any) {
+      Alert.alert('Error', error.message || 'Invalid code. Please try again.')
       throw error
     }
   }
@@ -182,7 +241,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         profile,
         isLoading,
         signUp,
+        signUpWithOTP,
+        verifyOTP,
         signIn,
+        signInWithOTP,
         signOut,
         updateProfile,
         refreshProfile,
