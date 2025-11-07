@@ -18,22 +18,17 @@ export default function ProfileScreen() {
   const [uploading, setUploading] = useState(false)
   const router = useRouter()
 
-  const handleSignOut = () => {
-    Alert.alert('Sign Out', 'Are you sure you want to sign out?', [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Sign Out', onPress: async () => {
-          await signOut()
-          router.replace('/(auth)/login')
-        }, style: 'destructive' },
-    ])
-  }
-
-  // Auto-redirect to login page if logged out (session null)
+  // Auto-redirect to login if not authenticated
   useEffect(() => {
     if (!session || !user) {
       router.replace('/(auth)/login')
     }
   }, [session, user])
+
+  const handleSignOut = async () => {
+    await signOut()
+    router.replace('/(auth)/login')
+  }
 
   const pickImage = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync()
@@ -61,6 +56,11 @@ export default function ProfileScreen() {
         setUploading(false)
       }
     }
+  }
+
+  // Don't render if not authenticated
+  if (!session || !user || !profile) {
+    return null
   }
 
   return (
